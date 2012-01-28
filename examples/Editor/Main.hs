@@ -34,7 +34,7 @@ runDbStore :: Draw.Font -> Transaction.Store DBTag IO -> IO a
 runDbStore font store = do
   Anchors.initDB store
   addHelp <- EventMapDoc.makeToggledHelpAdder Config.overlayDocKeys helpStyle
-  mainLoopWidget $ addHelp =<< makeWidget
+  mainLoopWidget font $ addHelp =<< makeWidget
   where
     helpStyle = TextView.Style {
       TextView.styleFont = font,
