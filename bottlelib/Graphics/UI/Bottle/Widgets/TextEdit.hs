@@ -10,13 +10,14 @@ module Graphics.UI.Bottle.Widgets.TextEdit(
   atSEmptyString,
   atSTextViewStyle) where
 
+import Control.Applicative ((*>))
 import Control.Arrow (first)
 import Data.Char (isSpace)
 import Data.List (genericLength)
 import Data.List.Split (splitWhen)
 import Data.List.Utils (enumerate)
 import Data.Maybe (fromJust, mapMaybe)
-import Data.Monoid (Monoid(..))
+import Data.Monoid (Monoid(..), Last(..))
 import Data.Vector.Vector2 (Vector2(..))
 import Graphics.DrawingCombinators.Utils (square, textHeight)
 import Graphics.UI.Bottle.Rect (Rect(..))
@@ -72,7 +73,7 @@ cursorTranslate style = Anim.translate (Vector2 (sCursorWidth style / 2) 0)
 makeTextEditCursor :: Widget.Id -> Int -> Widget.Id
 makeTextEditCursor myId = Widget.joinId myId . (:[]) . BinUtils.encodeS
 
-makeUnfocused :: Style -> String -> Widget.Id -> Widget ((,) String)
+makeUnfocused :: Style -> String -> Widget.Id -> Widget ((,) (Last String))
 makeUnfocused style str myId =
   Widget.takesFocus enter .
   (Widget.atContent . Sized.atRequestedSize)
@@ -83,7 +84,7 @@ makeUnfocused style str myId =
   Widget.toAnimId myId
   where
     enter dir =
-      (,) str . makeTextEditCursor myId $
+      (,) (Last Nothing) . makeTextEditCursor myId $
       Direction.fold (length str) enterRect dir
     -- TODO: Figure out what rect each letter is at, and find the one
     -- closest to the argument rect, and return that instead of
@@ -96,7 +97,7 @@ makeUnfocused style str myId =
 -- what "Font" should be)
 -- | Note: maxLines prevents the *user* from exceeding it, not the
 -- | given text...
-makeFocused :: Cursor -> Style -> String -> Widget.Id -> Widget ((,) String)
+makeFocused :: Cursor -> Style -> String -> Widget.Id -> Widget ((,) (Last String))
 makeFocused cursor style str myId =
   Widget.backgroundColor (sBackgroundCursorId style) blue .
   Widget.atImage (`mappend` cursorFrame) .
@@ -155,11 +156,10 @@ makeFocused cursor style str myId =
     cursorY = length linesBefore - 1
 
     eventResult newText newCursor =
-      (map snd newText,
-        Widget.EventResult {
-          Widget.eCursor = Just $ makeTextEditCursor myId newCursor,
-          Widget.eAnimIdMapping = mapping
-        })
+      Widget.addAnimIdMapping mapping *>
+      Widget.liftEventM (Last . Just $ map snd newText,
+            Widget.EventResult . Just $
+            makeTextEditCursor myId newCursor)
       where
         mapping animId = maybe animId (Anim.joinId myAnimId . translateId) $ Anim.subId myAnimId animId
         translateId [subId] = (:[]) . maybe subId (SBS8.pack . show) $ (`Map.lookup` dict) =<< Safe.readMay (SBS8.unpack subId)
@@ -284,7 +284,7 @@ makeFocused cursor style str myId =
 
         ]
 
-make :: Style -> Widget.Id -> String -> Widget.Id -> Widget ((,) String)
+make :: Style -> Widget.Id -> String -> Widget.Id -> Widget ((,) (Last String))
 make style cursor str myId =
   maybe makeUnfocused makeFocused mCursor style str myId
   where

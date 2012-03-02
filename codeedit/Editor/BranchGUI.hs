@@ -125,7 +125,8 @@ makeWidgetForView view innerWidget = do
       isEmpty <- Transaction.isEmpty
       unless isEmpty $ do
         Property.set Anchors.preCursor cursor
-        Property.set Anchors.postCursor . fromMaybe cursor $ Widget.eCursor eventResult
+        Property.set Anchors.postCursor . fromMaybe cursor $
+          Widget.erCursor eventResult
       return eventResult
 
   vWidget <-

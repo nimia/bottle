@@ -13,11 +13,12 @@ module Editor.BottleWidgets(
 ) where
 
 import Control.Arrow (second)
-import Control.Monad (when, liftM)
+import Control.Monad (liftM)
 import Data.ByteString.Char8 (pack)
 import Data.List (intersperse)
 import Data.List.Utils (enumerate, nth)
 import Data.Maybe (isJust)
+import Data.Monoid (Last(Last))
 import Data.Store.IRef (IRef)
 import Data.Store.Transaction (Transaction)
 import Data.Vector.Vector2 (Vector2(..))
@@ -69,7 +70,7 @@ makeFocusableTextView text myId = do
   makeFocusableView myId textView
 
 makeChoice ::
-  (Monad m) =>
+  MonadF m =>
   Widget.Id -> Transaction.Property t m Int -> Box.Orientation ->
   [TWidget t m] -> TWidget t m
 makeChoice selectionAnimId curChoiceRef orientation children = do
@@ -85,12 +86,14 @@ makeChoice selectionAnimId curChoiceRef orientation children = do
   return widget
   where
     updateCurChoice (i, focusable) =
-      Widget.atEvents (Property.set curChoiceRef i >>) focusable
+      Widget.atEvents
+      (Widget.liftEventM (Property.set curChoiceRef i) >>)
+      focusable
     selectedColor = Draw.Color 0 0.5 0 1
 
 -- TODO: This logic belongs in the FocusDelegator itself
 wrapDelegatedWithKeys ::
-  Monad m => FocusDelegator.Keys ->
+  MonadF m => FocusDelegator.Keys ->
   FocusDelegator.IsDelegating ->
   ((Widget (Transaction t m) ->
     Widget (Transaction t m)) -> a -> b) ->
@@ -123,7 +126,7 @@ wrapDelegatedWithKeys keys entryState atWidget mkResult myId = do
     return $ atWidget onWidget innerResult
 
 wrapDelegated ::
-  Monad m => FocusDelegator.IsDelegating ->
+  MonadF m => FocusDelegator.IsDelegating ->
   (Widget.Id -> TWidget t m) ->
   Widget.Id -> TWidget t m
 wrapDelegated entryState =
@@ -136,13 +139,13 @@ makeTextEdit ::
 makeTextEdit textRef myId = do
   text <- getP textRef
   let
-    lifter (newText, eventRes) = do
-      when (newText /= text) $ Property.set textRef newText
-      return eventRes
+    writeText (Last mNewText, x) = do
+      maybe (return ()) (Property.set textRef) mNewText
+      return x
   cursor <- readCursor
   style <- readTextStyle
   return .
-    Widget.atEvents lifter $
+    (Widget.atEvents . Widget.atEventMAction) writeText $
     TextEdit.make style cursor text myId
 
 makeWordEdit ::

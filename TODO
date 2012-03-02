@@ -1,3 +1,11 @@
+* In process..
+
+  * Adding EventM (WriterT AnimIdMapping) around the given f
+
+  * Now the (String,) Monad wrapper is going to give weird composition
+    semantics
+
+
 * Delete of infix-right-arg goes to infix-left-arg, where it should go to func
 
 * Add JumpTo which gives a hole-like search -- that can sit in a "tab"

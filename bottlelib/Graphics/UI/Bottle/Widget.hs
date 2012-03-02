@@ -1,12 +1,12 @@
 {-# OPTIONS -Wall #-}
-{-# LANGUAGE DeriveFunctor, FlexibleInstances, MultiParamTypeClasses, TemplateHaskell, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE Rank2Types, DeriveFunctor, FlexibleInstances, MultiParamTypeClasses, TemplateHaskell, GeneralizedNewtypeDeriving #-}
 module Graphics.UI.Bottle.Widget (
   Widget(..), MEnter, R,
   EnterResult(..), atEnterResultEvent, atEnterResultRect,
   Id(..), atId, joinId, subId,
   UserIO(..), atUioMaybeEnter, atUioEventMap, atUioFrame, atUioFocalArea,
-  EventResult(..), atEAnimIdMapping, atECursor,
-  emptyEventResult, eventResultFromCursor,
+  EventM, liftEventM, runEventM, addAnimIdMapping, atEventMAction,
+  EventResult(..), atErCursor, emptyEventResult, eventResultFromCursor,
   actionEventMap, actionEventMapMovesCursor,
   EventHandlers, atContent, atIsFocused,
   userIO, image, eventMap,
@@ -16,6 +16,10 @@ module Graphics.UI.Bottle.Widget (
   strongerEvents, weakerEvents,
   translate, translateUserIO, align) where
 
+import Control.Applicative (Applicative(..), (<$))
+import Control.Arrow (second)
+import Control.Monad.Trans.Class (MonadTrans)
+import Control.Monad.Trans.Writer (WriterT(..), mapWriterT)
 import Data.Binary (Binary)
 import Data.List(isPrefixOf)
 import Data.Monoid (Monoid(..))
@@ -27,6 +31,7 @@ import Graphics.UI.Bottle.Rect (Rect(..))
 import Graphics.UI.Bottle.SizeRange (Size)
 import Graphics.UI.Bottle.Sized (Sized)
 import qualified Data.AtFieldTH as AtFieldTH
+import qualified Data.Monoid as Monoid
 import qualified Graphics.DrawingCombinators as Draw
 import qualified Graphics.UI.Bottle.Animation as Anim
 import qualified Graphics.UI.Bottle.Direction as Direction
@@ -50,19 +55,23 @@ subId (Id folder) (Id path)
   | folder `isPrefixOf` path = Just $ drop (length folder) path
   | otherwise = Nothing
 
+type AnimIdMapping = Monoid.Endo AnimId
+newtype EventM f a = EventM {
+  emWriterT :: WriterT AnimIdMapping f a
+  }
+  deriving (Functor, Applicative, Monad, MonadTrans)
 
-data EventResult = EventResult {
-  eCursor :: Maybe Id,
-  eAnimIdMapping :: AnimId -> AnimId
+newtype EventResult = EventResult {
+  erCursor :: Maybe Id
   }
 
 data EnterResult f = EnterResult {
   enterResultRect :: Rect,
-  enterResultEvent :: f EventResult
+  enterResultEvent :: EventM f EventResult
   }
 
 type MEnter f = Maybe (Direction -> EnterResult f)
-type EventHandlers f = EventMap (f EventResult)
+type EventHandlers f = EventMap (EventM f EventResult)
 
 data UserIO f = UserIO {
   uioFrame :: Anim.Frame,
@@ -76,25 +85,43 @@ data Widget f = Widget {
   content :: Sized (UserIO f)
   }
 
+AtFieldTH.make ''EventM
 AtFieldTH.make ''EnterResult
-AtFieldTH.make ''Id
 AtFieldTH.make ''EventResult
+AtFieldTH.make ''Id
 AtFieldTH.make ''UserIO
 AtFieldTH.make ''Widget
 
-emptyEventResult :: EventResult
-emptyEventResult = EventResult {
-  eCursor = Nothing,
-  eAnimIdMapping = id
-  }
+toEventM :: f (a, AnimIdMapping) -> EventM f a
+toEventM = EventM . WriterT
 
-eventResultFromCursor :: Id -> EventResult
-eventResultFromCursor cursor = EventResult {
-  eCursor = Just cursor,
-  eAnimIdMapping = id
-  }
+liftEventM :: Functor f => f a -> EventM f a
+liftEventM = toEventM . fmap (flip (,) mempty)
 
-atEvents :: (f EventResult -> g EventResult) -> Widget f -> Widget g
+runEventM :: Functor f => EventM f a -> f (a, AnimId -> AnimId)
+runEventM =
+  (fmap . second) Monoid.appEndo . runWriterT . emWriterT
+
+atEventMAction
+  :: (forall a. f a -> g a) -> EventM f b -> EventM g b
+atEventMAction f = atEmWriterT . mapWriterT $ f
+
+mkEventM
+  :: Functor f => (AnimId -> AnimId) -> f a -> EventM f a
+mkEventM mapping = toEventM . fmap (flip (,) (Monoid.Endo mapping))
+
+addAnimIdMapping :: Applicative f => (AnimId -> AnimId) -> EventM f ()
+addAnimIdMapping mapping = mkEventM mapping $ pure ()
+
+emptyEventResult :: Functor f => f () -> EventM f EventResult
+emptyEventResult = mkEventM id . (EventResult Nothing <$)
+
+eventResultFromCursor :: Functor f => f Id -> EventM f EventResult
+eventResultFromCursor = mkEventM id . fmap (EventResult . Just)
+
+atEvents
+  :: (EventM f EventResult -> EventM g EventResult)
+  -> Widget f -> Widget g
 atEvents func =
   atUserIO chg
   where
@@ -149,7 +176,10 @@ takesFocus enter = atUserIO f
   where
     f uio = (atUioMaybeEnter . const) mEnter uio
       where
-        mEnter = Just $ fmap (EnterResult focalArea . fmap eventResultFromCursor) enter
+        mEnter =
+          Just $
+          fmap (EnterResult focalArea . eventResultFromCursor)
+          enter
         focalArea = uioFocalArea uio
 
 atMaybeEnter :: (MEnter f -> MEnter f) -> Widget f -> Widget f
@@ -176,15 +206,14 @@ actionEventMap ::
   Functor f => [EventMap.EventType] -> EventMap.Doc ->
   f () -> EventHandlers f
 actionEventMap keys doc act =
-  (fmap . fmap . const) emptyEventResult $
-  EventMap.fromEventTypes keys doc act
+  EventMap.fromEventTypes keys doc (emptyEventResult act)
 
 actionEventMapMovesCursor ::
   Functor f => [EventMap.EventType] -> EventMap.Doc ->
   f Id -> EventHandlers f
 actionEventMapMovesCursor keys doc act =
-  (fmap . fmap) eventResultFromCursor $
-  EventMap.fromEventTypes keys doc act
+  EventMap.fromEventTypes keys doc $
+  eventResultFromCursor act
 
 translateUserIO :: Vector2 R -> UserIO f -> UserIO f
 translateUserIO pos =
